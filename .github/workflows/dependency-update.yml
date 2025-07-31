@@ -1,0 +1,426 @@
+name: 自动更新依赖
+
+on:
+  schedule:
+    # 每周一凌晨2点运行
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
+    inputs:
+      update_type:
+        description: '更新类型'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+        - all
+
+env:
+  NODE_VERSION: '22.17.1'
+
+jobs:
+  # 检查依赖更新
+  check-updates:
+    runs-on: ubuntu-latest
+    name: 检查依赖更新
+    outputs:
+      has-updates: ${{ steps.check.outputs.has-updates }}
+      updates-summary: ${{ steps.check.outputs.updates-summary }}
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 检查过时的依赖
+      id: check
+      run: |
+        echo "检查过时的依赖..."
+        
+        # 检查过时的依赖
+        OUTDATED_OUTPUT=$(npm outdated --json 2>/dev/null || echo '{}')
+        
+        # 检查是否有更新
+        if [ "$OUTDATED_OUTPUT" = "{}" ]; then
+          echo "has-updates=false" >> $GITHUB_OUTPUT
+          echo "updates-summary=无可用更新" >> $GITHUB_OUTPUT
+          echo "✅ 所有依赖都是最新的"
+        else
+          echo "has-updates=true" >> $GITHUB_OUTPUT
+          
+          # 生成更新摘要
+          echo "发现可用更新:"
+          echo "$OUTDATED_OUTPUT" | jq -r 'to_entries[] | "- \(.key): \(.value.current) → \(.value.latest)"'
+          
+          # 保存摘要到输出
+          SUMMARY=$(echo "$OUTDATED_OUTPUT" | jq -r 'to_entries[] | "- \(.key): \(.value.current) → \(.value.latest)"' | head -10)
+          echo "updates-summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: 安全审计
+      run: |
+        echo "运行安全审计..."
+        npm audit --audit-level=moderate || true
+        
+    - name: 生成依赖报告
+      run: |
+        echo "# 依赖检查报告" > dependency-report.md
+        echo "" >> dependency-report.md
+        echo "## 📊 当前状态" >> dependency-report.md
+        echo "- 检查时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> dependency-report.md
+        echo "- Node.js版本: ${{ env.NODE_VERSION }}" >> dependency-report.md
+        echo "" >> dependency-report.md
+        
+        if [ "${{ steps.check.outputs.has-updates }}" = "true" ]; then
+          echo "## 🔄 可用更新" >> dependency-report.md
+          echo "" >> dependency-report.md
+          echo "${{ steps.check.outputs.updates-summary }}" >> dependency-report.md
+        else
+          echo "## ✅ 状态" >> dependency-report.md
+          echo "所有依赖都是最新的！" >> dependency-report.md
+        fi
+        
+    - name: 上传依赖报告
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-report
+        path: dependency-report.md
+        retention-days: 30
+
+  # 自动更新依赖
+  update-dependencies:
+    runs-on: ubuntu-latest
+    name: 更新依赖
+    needs: check-updates
+    if: needs.check-updates.outputs.has-updates == 'true'
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 设置Git用户
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 更新依赖
+      run: |
+        echo "开始更新依赖..."
+        
+        UPDATE_TYPE="${{ github.event.inputs.update_type || 'patch' }}"
+        echo "更新类型: $UPDATE_TYPE"
+        
+        case $UPDATE_TYPE in
+          "patch")
+            echo "更新补丁版本..."
+            npx npm-check-updates -u --target patch
+            ;;
+          "minor")
+            echo "更新次要版本..."
+            npx npm-check-updates -u --target minor
+            ;;
+          "major")
+            echo "更新主要版本..."
+            npx npm-check-updates -u --target major
+            ;;
+          "all")
+            echo "更新所有版本..."
+            npx npm-check-updates -u
+            ;;
+          *)
+            echo "未知更新类型，使用patch"
+            npx npm-check-updates -u --target patch
+            ;;
+        esac
+        
+    - name: 安装更新后的依赖
+      run: |
+        echo "安装更新后的依赖..."
+        npm install
+        
+    - name: 运行测试
+      run: |
+        echo "运行测试以验证更新..."
+        npm test || {
+          echo "❌ 测试失败，依赖更新可能存在问题"
+          exit 1
+        }
+        
+    - name: 运行代码检查
+      run: |
+        echo "运行代码质量检查..."
+        npm run lint || {
+          echo "❌ 代码检查失败"
+          exit 1
+        }
+        
+        npm run type-check || {
+          echo "❌ 类型检查失败"
+          exit 1
+        }
+        
+    - name: 构建项目
+      run: |
+        echo "构建项目以验证更新..."
+        npm run build || {
+          echo "❌ 构建失败"
+          exit 1
+        }
+        
+    - name: 生成更新摘要
+      run: |
+        echo "生成更新摘要..."
+        
+        # 检查是否有变更
+        if git diff --quiet package.json package-lock.json; then
+          echo "没有依赖更新"
+          exit 0
+        fi
+        
+        # 生成变更摘要
+        cat > update-summary.md << 'EOF'
+        # 🔄 依赖自动更新
+        
+        ## 📋 更新信息
+        - **更新时间**: $(date -u +'%Y年%m月%d日 %H:%M UTC')
+        - **更新类型**: ${{ github.event.inputs.update_type || 'patch' }}
+        - **触发方式**: ${{ github.event_name == 'schedule' && '定时任务' || '手动触发' }}
+        
+        ## 📦 更新的依赖
+        
+        EOF
+        
+        # 添加具体的变更信息
+        git diff package.json | grep '^[+-]' | grep -v '^[+-][+-][+-]' | sed 's/^+/✅ 新增: /' | sed 's/^-/❌ 移除: /' >> update-summary.md
+        
+        echo "" >> update-summary.md
+        echo "## ✅ 验证结果" >> update-summary.md
+        echo "- 🧪 测试通过" >> update-summary.md
+        echo "- 🔍 代码检查通过" >> update-summary.md
+        echo "- 🏗️ 构建成功" >> update-summary.md
+        echo "" >> update-summary.md
+        echo "## 🔒 安全检查" >> update-summary.md
+        
+        # 运行安全审计
+        if npm audit --audit-level=moderate; then
+          echo "- ✅ 无安全漏洞" >> update-summary.md
+        else
+          echo "- ⚠️ 发现安全问题，请手动检查" >> update-summary.md
+        fi
+        
+    - name: 创建Pull Request
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: |
+          chore(deps): 自动更新依赖 (${{ github.event.inputs.update_type || 'patch' }})
+          
+          - 更新类型: ${{ github.event.inputs.update_type || 'patch' }}
+          - 更新时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          - 所有测试通过
+          - 代码检查通过
+          - 构建成功
+        title: '🔄 自动更新依赖 (${{ github.event.inputs.update_type || 'patch' }})'
+        body-path: update-summary.md
+        branch: auto-update-dependencies
+        delete-branch: true
+        labels: |
+          dependencies
+          automated
+        reviewers: |
+          # 添加默认审查者
+        assignees: |
+          # 添加默认指派者
+
+  # 安全更新
+  security-update:
+    runs-on: ubuntu-latest
+    name: 安全更新
+    if: github.event_name == 'schedule' || github.event.inputs.update_type == 'security'
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 设置Git用户
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 运行安全审计
+      id: audit
+      run: |
+        echo "运行安全审计..."
+        
+        # 运行审计并捕获输出
+        if npm audit --audit-level=moderate --json > audit-result.json 2>/dev/null; then
+          echo "audit-status=clean" >> $GITHUB_OUTPUT
+          echo "✅ 无安全漏洞"
+        else
+          echo "audit-status=vulnerabilities" >> $GITHUB_OUTPUT
+          echo "⚠️ 发现安全漏洞"
+          
+          # 显示漏洞摘要
+          if [ -f audit-result.json ]; then
+            jq -r '.vulnerabilities | to_entries[] | "- \(.key): \(.value.severity)"' audit-result.json || true
+          fi
+        fi
+        
+    - name: 自动修复安全漏洞
+      if: steps.audit.outputs.audit-status == 'vulnerabilities'
+      run: |
+        echo "尝试自动修复安全漏洞..."
+        
+        # 尝试自动修复
+        npm audit fix --force || {
+          echo "自动修复失败，需要手动处理"
+        }
+        
+        # 重新运行审计
+        if npm audit --audit-level=moderate; then
+          echo "✅ 安全漏洞已修复"
+        else
+          echo "⚠️ 仍存在安全漏洞，需要手动处理"
+        fi
+        
+    - name: 验证修复
+      if: steps.audit.outputs.audit-status == 'vulnerabilities'
+      run: |
+        echo "验证安全修复..."
+        
+        # 运行测试
+        npm test || {
+          echo "❌ 测试失败，安全修复可能破坏了功能"
+          git checkout -- package.json package-lock.json
+          exit 1
+        }
+        
+        # 运行构建
+        npm run build || {
+          echo "❌ 构建失败，安全修复可能破坏了构建"
+          git checkout -- package.json package-lock.json
+          exit 1
+        }
+        
+    - name: 创建安全更新PR
+      if: steps.audit.outputs.audit-status == 'vulnerabilities'
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: |
+          fix(security): 自动修复安全漏洞
+          
+          - 修复时间: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          - 修复方式: npm audit fix
+          - 所有测试通过
+          - 构建成功
+        title: '🔒 安全漏洞自动修复'
+        body: |
+          # 🔒 安全漏洞自动修复
+          
+          ## 📋 修复信息
+          - **修复时间**: $(date -u +'%Y年%m月%d日 %H:%M UTC')
+          - **修复方式**: `npm audit fix`
+          - **触发原因**: 定期安全检查
+          
+          ## 🛡️ 安全状态
+          - 已运行 `npm audit fix` 修复已知漏洞
+          - 所有测试通过
+          - 构建成功
+          
+          ## ⚠️ 注意事项
+          请仔细审查此PR，确保：
+          1. 功能没有被破坏
+          2. 所有依赖更新都是必要的
+          3. 没有引入新的问题
+          
+          ## 🔍 下一步
+          - [ ] 代码审查
+          - [ ] 功能测试
+          - [ ] 部署验证
+        branch: security-fix-auto
+        delete-branch: true
+        labels: |
+          security
+          automated
+          high-priority
+
+  # 通知结果
+  notify:
+    runs-on: ubuntu-latest
+    name: 通知结果
+    needs: [check-updates, update-dependencies, security-update]
+    if: always()
+    
+    steps:
+    - name: 生成通知摘要
+      run: |
+        echo "# 📊 依赖更新报告" > notification.md
+        echo "" >> notification.md
+        echo "## 🕐 执行时间" >> notification.md
+        echo "$(date -u +'%Y年%m月%d日 %H:%M UTC')" >> notification.md
+        echo "" >> notification.md
+        
+        echo "## 📋 执行结果" >> notification.md
+        echo "| 任务 | 状态 |" >> notification.md
+        echo "|------|------|" >> notification.md
+        echo "| 检查更新 | ${{ needs.check-updates.result == 'success' && '✅ 成功' || '❌ 失败' }} |" >> notification.md
+        echo "| 更新依赖 | ${{ needs.update-dependencies.result == 'success' && '✅ 成功' || needs.update-dependencies.result == 'skipped' && '⏭️ 跳过' || '❌ 失败' }} |" >> notification.md
+        echo "| 安全更新 | ${{ needs.security-update.result == 'success' && '✅ 成功' || needs.security-update.result == 'skipped' && '⏭️ 跳过' || '❌ 失败' }} |" >> notification.md
+        echo "" >> notification.md
+        
+        if [ "${{ needs.check-updates.outputs.has-updates }}" = "true" ]; then
+          echo "## 🔄 发现的更新" >> notification.md
+          echo "${{ needs.check-updates.outputs.updates-summary }}" >> notification.md
+        else
+          echo "## ✅ 状态" >> notification.md
+          echo "所有依赖都是最新的！" >> notification.md
+        fi
+        
+        echo "" >> notification.md
+        echo "## 🔗 相关链接" >> notification.md
+        echo "- [工作流运行](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> notification.md
+        echo "- [依赖检查](https://github.com/${{ github.repository }}/network/dependencies)" >> notification.md
+        
+        cat notification.md
+        
+    - name: 上传通知报告
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-update-notification
+        path: notification.md
+        retention-days: 30

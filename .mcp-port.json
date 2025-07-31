@@ -1,0 +1,9 @@
+{
+  "port": 3003,
+  "wsUrl": "ws://localhost:3003",
+  "httpUrl": "http://localhost:3003",
+  "pid": 14616,
+  "startTime": "2025-07-31T13:12:50.536Z",
+  "projectPath": "E:\\XMjiucuo",
+  "serverVersion": "2.0.0"
+}

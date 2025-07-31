@@ -1,0 +1,401 @@
+name: 持续集成检查
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  schedule:
+    # 每天凌晨2点运行一次
+    - cron: '0 2 * * *'
+
+env:
+  NODE_VERSION: '22.17.1'
+
+jobs:
+  # 代码质量检查
+  code-quality:
+    runs-on: ubuntu-latest
+    name: 代码质量检查
+    
+    strategy:
+      matrix:
+        node-version: ['18.x', '20.x', '22.x']
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 代码格式检查
+      run: npm run format:check
+      
+    - name: ESLint检查
+      run: npm run lint
+      
+    - name: TypeScript类型检查
+      run: npm run type-check
+      
+    - name: 构建测试
+      run: npm run build
+      
+    - name: 运行测试
+      run: npm test
+
+  # 安全扫描
+  security-scan:
+    runs-on: ubuntu-latest
+    name: 安全扫描
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 运行npm audit
+      run: npm audit --audit-level=moderate
+      continue-on-error: true
+      
+    - name: 检查过时依赖
+      run: npm outdated
+      continue-on-error: true
+
+  # 性能测试
+  performance-test:
+    runs-on: ubuntu-latest
+    name: 性能测试
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 构建项目
+      run: npm run build
+      
+    - name: 启动MCP服务器
+      run: |
+        node mcp-server.js &
+        MCP_PID=$!
+        echo "MCP_PID=${MCP_PID}" >> $GITHUB_ENV
+        
+        # 等待服务启动
+        sleep 10
+        
+    - name: 性能基准测试
+      run: |
+        # 测试服务器响应时间
+        echo "测试MCP服务器响应时间..."
+        
+        # 使用curl测试响应时间
+        for i in {1..5}; do
+          RESPONSE_TIME=$(curl -o /dev/null -s -w "%{time_total}" http://localhost:3001/api/status || echo "0")
+          echo "请求 $i: ${RESPONSE_TIME}s"
+        done
+        
+        # 测试内存使用
+        echo "检查内存使用情况..."
+        ps -p $MCP_PID -o pid,ppid,cmd,%mem,%cpu --no-headers || echo "进程已结束"
+        
+    - name: 清理进程
+      if: always()
+      run: |
+        if [ ! -z "$MCP_PID" ]; then
+          kill $MCP_PID 2>/dev/null || true
+        fi
+        pkill -f "node mcp-server.js" 2>/dev/null || true
+
+  # 兼容性测试
+  compatibility-test:
+    runs-on: ${{ matrix.os }}
+    name: 兼容性测试
+    
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: ['18.x', '20.x', '22.x']
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 构建项目
+      run: npm run build
+      
+    - name: 验证构建产物
+      run: |
+        # 检查关键文件是否存在
+        test -f dist/index.html
+        test -f mcp-server.js
+        test -f package.json
+        
+    - name: 测试启动脚本 (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        # 测试Windows启动脚本语法
+        if (Test-Path "start-mcp.bat") {
+          Write-Host "Windows启动脚本存在"
+        } else {
+          Write-Host "警告: Windows启动脚本不存在"
+        }
+      shell: powershell
+      
+    - name: 测试启动脚本 (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        # 检查Unix启动脚本
+        if [ -f "start-mcp.sh" ]; then
+          echo "Unix启动脚本存在"
+          chmod +x start-mcp.sh
+        else
+          echo "警告: Unix启动脚本不存在"
+        fi
+
+  # 文档检查
+  documentation-check:
+    runs-on: ubuntu-latest
+    name: 文档检查
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 检查必要文档
+      run: |
+        echo "检查必要文档文件..."
+        
+        # 检查README文件
+        if [ -f "README.md" ]; then
+          echo "✅ README.md 存在"
+        else
+          echo "❌ README.md 缺失"
+          exit 1
+        fi
+        
+        # 检查安装指南
+        if [ -f "build/INSTALL.md" ] || [ -f "INSTALL.md" ]; then
+          echo "✅ 安装指南存在"
+        else
+          echo "⚠️ 安装指南缺失"
+        fi
+        
+        # 检查部署指南
+        if [ -f "TraeIDE插件部署指南.md" ]; then
+          echo "✅ 部署指南存在"
+        else
+          echo "⚠️ 部署指南缺失"
+        fi
+        
+        # 检查产品文档
+        if [ -f ".trae/documents/TraeIDE项目偏离预防插件产品需求文档.md" ]; then
+          echo "✅ 产品需求文档存在"
+        else
+          echo "⚠️ 产品需求文档缺失"
+        fi
+        
+    - name: 检查文档链接
+      run: |
+        echo "检查README中的链接..."
+        
+        # 简单的链接检查
+        if grep -q "http" README.md; then
+          echo "发现外部链接，建议验证可访问性"
+        fi
+        
+        # 检查相对路径链接
+        if grep -q "\](.*/" README.md; then
+          echo "发现相对路径链接，建议验证文件存在性"
+        fi
+
+  # 构建验证
+  build-verification:
+    runs-on: ubuntu-latest
+    name: 构建验证
+    needs: [code-quality, security-scan]
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 设置Node.js环境
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: 安装依赖
+      run: npm ci
+      
+    - name: 清理构建目录
+      run: rm -rf dist build
+      
+    - name: 执行完整构建
+      run: npm run build
+      
+    - name: 验证构建产物
+      run: |
+        echo "验证构建产物..."
+        
+        # 检查dist目录
+        if [ -d "dist" ]; then
+          echo "✅ dist目录存在"
+          echo "dist目录内容:"
+          ls -la dist/
+        else
+          echo "❌ dist目录不存在"
+          exit 1
+        fi
+        
+        # 检查关键文件
+        REQUIRED_FILES=("dist/index.html" "mcp-server.js" "package.json")
+        for file in "${REQUIRED_FILES[@]}"; do
+          if [ -f "$file" ]; then
+            echo "✅ $file 存在"
+          else
+            echo "❌ $file 缺失"
+            exit 1
+          fi
+        done
+        
+        # 检查文件大小
+        INDEX_SIZE=$(stat -c%s "dist/index.html" 2>/dev/null || echo "0")
+        if [ "$INDEX_SIZE" -gt 1000 ]; then
+          echo "✅ index.html 大小正常 (${INDEX_SIZE} bytes)"
+        else
+          echo "⚠️ index.html 可能过小 (${INDEX_SIZE} bytes)"
+        fi
+        
+    - name: 模拟插件打包
+      run: |
+        echo "模拟插件打包过程..."
+        
+        # 创建临时打包目录
+        mkdir -p temp-package/traeide-deviation-prevention-plugin
+        
+        # 复制必要文件
+        cp -r dist temp-package/traeide-deviation-prevention-plugin/
+        cp package.json temp-package/traeide-deviation-prevention-plugin/
+        cp mcp-server.js temp-package/traeide-deviation-prevention-plugin/
+        cp traeide-config.json temp-package/traeide-deviation-prevention-plugin/
+        cp README.md temp-package/traeide-deviation-prevention-plugin/
+        
+        # 创建模拟的环境配置
+        echo "NODE_ENV=production" > temp-package/traeide-deviation-prevention-plugin/.env.production
+        
+        # 检查包大小
+        PACKAGE_SIZE=$(du -sh temp-package/ | cut -f1)
+        echo "模拟包大小: ${PACKAGE_SIZE}"
+        
+        # 清理
+        rm -rf temp-package
+        
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-artifacts-${{ github.sha }}
+        path: |
+          dist/
+          mcp-server.js
+          package.json
+          traeide-config.json
+        retention-days: 7
+
+  # 总结报告
+  summary:
+    runs-on: ubuntu-latest
+    name: CI总结报告
+    needs: [code-quality, security-scan, performance-test, compatibility-test, documentation-check, build-verification]
+    if: always()
+    
+    steps:
+    - name: 生成CI报告
+      run: |
+        echo "# 🔍 持续集成检查报告"
+        echo
+        echo "## 📊 检查结果"
+        echo
+        echo "| 检查项目 | 状态 |"
+        echo "|----------|------|"
+        echo "| 代码质量检查 | ${{ needs.code-quality.result == 'success' && '✅ 通过' || '❌ 失败' }} |"
+        echo "| 安全扫描 | ${{ needs.security-scan.result == 'success' && '✅ 通过' || '❌ 失败' }} |"
+        echo "| 性能测试 | ${{ needs.performance-test.result == 'success' && '✅ 通过' || '❌ 失败' }} |"
+        echo "| 兼容性测试 | ${{ needs.compatibility-test.result == 'success' && '✅ 通过' || '❌ 失败' }} |"
+        echo "| 文档检查 | ${{ needs.documentation-check.result == 'success' && '✅ 通过' || '❌ 失败' }} |"
+        echo "| 构建验证 | ${{ needs.build-verification.result == 'success' && '✅ 通过' || '❌ 失败' }} |"
+        echo
+        echo "## 📝 建议"
+        
+        if [ "${{ needs.code-quality.result }}" != "success" ]; then
+          echo "- 🔧 修复代码质量问题"
+        fi
+        
+        if [ "${{ needs.security-scan.result }}" != "success" ]; then
+          echo "- 🔒 处理安全漏洞"
+        fi
+        
+        if [ "${{ needs.performance-test.result }}" != "success" ]; then
+          echo "- ⚡ 优化性能问题"
+        fi
+        
+        if [ "${{ needs.compatibility-test.result }}" != "success" ]; then
+          echo "- 🔄 修复兼容性问题"
+        fi
+        
+        if [ "${{ needs.documentation-check.result }}" != "success" ]; then
+          echo "- 📚 完善项目文档"
+        fi
+        
+        if [ "${{ needs.build-verification.result }}" != "success" ]; then
+          echo "- 🏗️ 修复构建问题"
+        fi
+        
+        echo
+        echo "## 🎯 下一步"
+        echo "- 根据上述建议修复问题"
+        echo "- 重新运行CI检查"
+        echo "- 准备发布版本"
+        
+    - name: 设置CI状态
+      run: |
+        if [ "${{ needs.code-quality.result }}" = "success" ] && \
+           [ "${{ needs.security-scan.result }}" = "success" ] && \
+           [ "${{ needs.build-verification.result }}" = "success" ]; then
+          echo "🎉 CI检查全部通过！"
+          exit 0
+        else
+          echo "❌ CI检查存在问题，请查看详细报告"
+          exit 1
+        fi

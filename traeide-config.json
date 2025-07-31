@@ -1,0 +1,308 @@
+{
+  "name": "TraeIDE项目偏离预防MCP产品",
+  "version": "1.0.0",
+  "description": "基于MCP协议的项目偏离预防和智能纠正系统",
+  "type": "mcp-extension",
+  "main": "mcp-server.js",
+  "webApp": {
+    "enabled": true,
+    "startCommand": "start-mcp.bat",
+    "stopCommand": "stop-mcp.bat",
+    "port": "${WEB_PORT:-5176}",
+    "autoStart": true,
+    "healthCheck": {
+      "url": "http://${WEB_HOST:-localhost}:${WEB_PORT:-3001}/api/status",
+      "interval": 30000,
+      "timeout": 5000
+    }
+  },
+  "mcp": {
+    "server": {
+      "command": "node",
+      "args": ["mcp-server.js"],
+      "env": {
+        "TRAEIDE_PROJECT_PATH": "${workspaceRoot}",
+        "MCP_WEB_PORT": "${MCP_WEB_PORT:-3001}",
+        "NODE_ENV": "${NODE_ENV:-production}"
+      },
+      "capabilities": {
+        "resources": true,
+        "tools": true,
+        "prompts": true
+      }
+    },
+    "client": {
+      "name": "traeide-deviation-prevention",
+      "version": "1.0.0",
+      "serverUrl": "${MCP_PROTOCOL:-ws}://${MCP_HOST:-localhost}:${MCP_WEB_PORT:-3001}",
+      "timeout": "${CONNECTION_TIMEOUT:-10000}",
+      "retryCount": "${HEALTH_CHECK_RETRY:-3}"
+    }
+  },
+  "ui": {
+    "integration": {
+      "sidebar": {
+        "enabled": true,
+        "position": "left",
+        "width": 320,
+        "collapsible": true,
+        "defaultCollapsed": false
+      },
+      "panels": [
+        {
+          "id": "project-dashboard",
+          "title": "项目仪表板",
+          "icon": "dashboard",
+          "url": "/",
+          "position": "main"
+        },
+        {
+          "id": "context-management",
+          "title": "上下文管理",
+          "icon": "database",
+          "url": "/context",
+          "position": "main"
+        },
+        {
+          "id": "requirements-management",
+          "title": "需求管理",
+          "icon": "file-text",
+          "url": "/requirements",
+          "position": "main"
+        },
+        {
+          "id": "history-center",
+          "title": "历史文档中心",
+          "icon": "history",
+          "url": "/history",
+          "position": "main"
+        },
+        {
+          "id": "session-backtrack",
+          "title": "会话回溯",
+          "icon": "message-square",
+          "url": "/sessions",
+          "position": "main"
+        },
+        {
+          "id": "deepseek-integration",
+          "title": "DeepSeek集成",
+          "icon": "brain",
+          "url": "/deepseek",
+          "position": "main"
+        },
+        {
+          "id": "system-config",
+          "title": "系统配置",
+          "icon": "settings",
+          "url": "/config",
+          "position": "main"
+        }
+      ],
+      "contextMenu": {
+        "enabled": true,
+        "items": [
+          {
+            "id": "analyze-deviation",
+            "label": "分析项目偏离",
+            "icon": "search",
+            "command": "traeide.analyzeDeviation",
+            "when": "resourceExtname in ['.js', '.ts', '.vue', '.jsx', '.tsx']"
+          },
+          {
+            "id": "quick-fix",
+            "label": "智能修复建议",
+            "icon": "lightbulb",
+            "command": "traeide.quickFix",
+            "when": "resourceExtname in ['.js', '.ts', '.vue', '.jsx', '.tsx']"
+          },
+          {
+            "id": "add-to-context",
+            "label": "添加到上下文",
+            "icon": "plus",
+            "command": "traeide.addToContext"
+          }
+        ]
+      }
+    },
+    "notifications": {
+      "enabled": true,
+      "types": [
+        "deviation-detected",
+        "requirement-updated",
+        "analysis-complete",
+        "suggestion-available"
+      ]
+    },
+    "statusBar": {
+      "enabled": true,
+      "items": [
+        {
+          "id": "mcp-status",
+          "text": "MCP: $(circle-filled)",
+          "tooltip": "MCP服务状态",
+          "command": "traeide.showMCPStatus"
+        },
+        {
+          "id": "deviation-score",
+          "text": "偏离度: 0%",
+          "tooltip": "当前项目偏离度",
+          "command": "traeide.showDeviationDetails"
+        }
+      ]
+    }
+  },
+  "commands": [
+    {
+      "command": "traeide.analyzeDeviation",
+      "title": "分析项目偏离",
+      "category": "TraeIDE"
+    },
+    {
+      "command": "traeide.quickFix",
+      "title": "智能修复建议",
+      "category": "TraeIDE"
+    },
+    {
+      "command": "traeide.addToContext",
+      "title": "添加到上下文",
+      "category": "TraeIDE"
+    },
+    {
+      "command": "traeide.showMCPStatus",
+      "title": "显示MCP状态",
+      "category": "TraeIDE"
+    },
+    {
+      "command": "traeide.showDeviationDetails",
+      "title": "显示偏离详情",
+      "category": "TraeIDE"
+    },
+    {
+      "command": "traeide.openDashboard",
+      "title": "打开项目仪表板",
+      "category": "TraeIDE"
+    },
+    {
+      "command": "traeide.refreshContext",
+      "title": "刷新项目上下文",
+      "category": "TraeIDE"
+    }
+  ],
+  "keybindings": [
+    {
+      "command": "traeide.analyzeDeviation",
+      "key": "ctrl+shift+a",
+      "when": "editorTextFocus"
+    },
+    {
+      "command": "traeide.quickFix",
+      "key": "ctrl+shift+f",
+      "when": "editorTextFocus"
+    },
+    {
+      "command": "traeide.openDashboard",
+      "key": "ctrl+shift+d"
+    }
+  ],
+  "activation": {
+    "events": [
+      "onStartupFinished",
+      "onCommand:traeide.analyzeDeviation",
+      "onLanguage:javascript",
+      "onLanguage:typescript",
+      "onLanguage:vue"
+    ]
+  },
+  "contributes": {
+    "configuration": {
+      "title": "TraeIDE项目偏离预防",
+      "properties": {
+        "traeide.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "启动时自动启动MCP服务"
+        },
+        "traeide.autoAnalyze": {
+          "type": "boolean",
+          "default": true,
+          "description": "文件保存时自动分析偏离"
+        },
+        "traeide.notificationLevel": {
+          "type": "string",
+          "enum": ["all", "warning", "error", "none"],
+          "default": "warning",
+          "description": "通知级别"
+        },
+        "traeide.deviationThreshold": {
+          "type": "number",
+          "default": 80,
+          "minimum": 0,
+          "maximum": 100,
+          "description": "偏离度阈值（低于此值将触发警告）"
+        },
+        "traeide.deepseek.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API密钥"
+        },
+        "traeide.deepseek.model": {
+          "type": "string",
+          "enum": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+          "default": "deepseek-chat",
+          "description": "DeepSeek模型选择"
+        }
+      }
+    },
+    "views": {
+      "explorer": [
+        {
+          "id": "traeide-deviation-view",
+          "name": "项目偏离分析",
+          "when": "traeide.enabled"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "traeide-container",
+          "title": "TraeIDE偏离预防",
+          "icon": "$(shield)"
+        }
+      ]
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "express": "^4.18.2",
+    "ws": "^8.14.2",
+    "chokidar": "^3.5.3"
+  },
+  "scripts": {
+    "start": "node mcp-server.js",
+    "start-web": "npm run dev",
+    "start-all": "start-mcp.bat",
+    "stop-all": "stop-mcp.bat",
+    "install-deps": "npm install",
+    "health-check": "curl -f http://localhost:3001/api/status || exit 1"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "traeide": ">=1.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/traeide/deviation-prevention-mcp"
+  },
+  "keywords": [
+    "traeide",
+    "mcp",
+    "deviation-prevention",
+    "project-management",
+    "ai-assistant",
+    "deepseek"
+  ],
+  "author": "TraeIDE Team",
+  "license": "MIT"
+}
